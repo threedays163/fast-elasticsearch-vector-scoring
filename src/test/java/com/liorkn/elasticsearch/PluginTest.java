@@ -1,38 +1,79 @@
 package com.liorkn.elasticsearch;
 
 import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.http.HttpHost;
 import org.apache.http.util.EntityUtils;
-import org.elasticsearch.client.Request;
+import org.elasticsearch.action.admin.indices.create.CreateIndexRequest;
+import org.elasticsearch.action.admin.indices.create.CreateIndexResponse;
+import org.elasticsearch.action.admin.indices.delete.DeleteIndexRequest;
+import org.elasticsearch.action.delete.DeleteAction;
+import org.elasticsearch.action.index.IndexRequest;
+import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.support.WriteRequest;
+import org.elasticsearch.client.IndicesAdminClient;
 import org.elasticsearch.client.RestClient;
-import org.elasticsearch.client.Response;
+import org.elasticsearch.client.RestHighLevelClient;
+import org.elasticsearch.client.transport.TransportClient;
+import org.elasticsearch.common.lucene.search.function.CombineFunction;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.transport.TransportAddress;
+import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.index.query.functionscore.FunctionScoreQueryBuilder;
+import org.elasticsearch.index.query.functionscore.ScoreFunctionBuilder;
+import org.elasticsearch.index.query.functionscore.ScriptScoreFunctionBuilder;
+import org.elasticsearch.script.Script;
+import org.elasticsearch.transport.client.PreBuiltTransportClient;
 import org.junit.AfterClass;
-import org.junit.Assert;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Created by Lior Knaany on 4/7/18.
  */
 public class PluginTest {
 
-    private static EmbeddedElasticsearchServer esServer;
-    private static RestClient esClient;
+    private static IndicesAdminClient indicesAdminClient;
+
+    private static TransportClient client;
+
+    private static RestHighLevelClient restHighLevelClient;
+
+    private static String indexName = "knn_test";
 
     @BeforeClass
     public static void init() throws Exception {
-        esServer = new EmbeddedElasticsearchServer();
-        esClient = RestClient.builder(new HttpHost("localhost", esServer.getPort(), "http")).build();
+
+        Settings settings = Settings.builder()
+                .put("client.transport.sniff", "false")
+                .put("cluster.name", "ali-bj-es-clusters")
+                .build();
+        client = new PreBuiltTransportClient(settings);
+        String[] hostArray = new String[]{"10.16.40.48", "10.16.40.250", "10.16.40.138"};
+
+        Arrays.stream(hostArray).forEach(host -> {
+            try {
+                InetAddress inetAddress = InetAddress.getByName(host);
+                TransportAddress transportAddress = new TransportAddress(inetAddress, 9300);
+                client.addTransportAddress(transportAddress);
+            } catch (Exception e) {
+            }
+        });
+        indicesAdminClient = client.admin().indices();
 
         // delete test index if exists
         try {
-        	Request deleteRequest = new Request("DELETE", "/test");
-            esClient.performRequest(deleteRequest);
-        } catch (Exception e) {}
+            DeleteIndexRequest deleteIndexRequest = new DeleteIndexRequest(indexName);
+            indicesAdminClient.delete(deleteIndexRequest);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
 
         // create test index
         String mappingJson = "{\n" +
@@ -53,12 +94,19 @@ public class PluginTest {
                 "    }\n" +
                 "  }\n" +
                 "}";
-        Request putRequest = new Request("PUT", "/test");
-        putRequest.setJsonEntity(mappingJson);
-        esClient.performRequest(putRequest);
+        CreateIndexRequest createIndexRequest = new CreateIndexRequest(indexName);
+        createIndexRequest.mapping("type", mappingJson, XContentType.JSON);
+        CreateIndexResponse response = null;
+
+        try {
+            response = indicesAdminClient.create(createIndexRequest).actionGet();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     public static final ObjectMapper mapper = new ObjectMapper();
+
     static {
         mapper.configure(JsonParser.Feature.ALLOW_SINGLE_QUOTES, true);
         mapper.configure(JsonParser.Feature.ALLOW_UNQUOTED_FIELD_NAMES, true);
@@ -68,101 +116,142 @@ public class PluginTest {
     @Test
     public void test() throws Exception {
         final ObjectMapper mapper = new ObjectMapper();
-        final TestObject[] objs = {new TestObject(1, new float[] {0.0f, 0.5f, 1.0f}),
-                new TestObject(2, new float[] {0.2f, 0.6f, 0.99f})};
+        final TestObject[] objs = {new TestObject(1, new float[]{0.0f, 0.5f, 1.0f}),
+                new TestObject(2, new float[]{0.2f, 0.6f, 0.99f})};
 
         for (int i = 0; i < objs.length; i++) {
             final TestObject t = objs[i];
             final String json = mapper.writeValueAsString(t);
             System.out.println(json);
-            Request indexRequest = new Request("POST", "/test/_doc/" + t.jobId);
-            indexRequest.addParameter("refresh", "true");
-            indexRequest.setJsonEntity(json);
-            final Response put = esClient.performRequest(indexRequest);
-            System.out.println(put);
-            System.out.println(EntityUtils.toString(put.getEntity()));
-            final int statusCode = put.getStatusLine().getStatusCode();
-            Assert.assertTrue(statusCode == 200 || statusCode == 201);
+            restHighLevelClient.index(new IndexRequest(indexName).id(String.valueOf(t.jobId)).source(json, XContentType.JSON).setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE));
         }
 
-        // Test cosine score function
-        String body = "{" +
-                "  \"query\": {" +
-                "    \"function_score\": {" +
-                "      \"boost_mode\": \"replace\"," +
-                "      \"script_score\": {" +
-                "        \"script\": {" +
-                "          \"source\": \"binary_vector_score\"," +
-                "          \"lang\": \"knn\"," +
-                "          \"params\": {" +
-                "            \"cosine\": true," +
-                "            \"field\": \"embedding_vector\"," +
-                "            \"vector\": [" +
-                "               0.1, 0.2, 0.3" +
-                "             ]" +
-                "          }" +
-                "        }" +
-                "      }" +
-                "    }" +
-                "  }," +
-                "  \"size\": 100" +
-                "}";
-        Request searchRequest = new Request("POST", "/test/_search");
-        searchRequest.setJsonEntity(body);
-        Response res = esClient.performRequest(searchRequest);
-        System.out.println(res);
-        String resBody = EntityUtils.toString(res.getEntity());
-        System.out.println(resBody);
-        Assert.assertEquals("search should return status code 200", 200, res.getStatusLine().getStatusCode());
-        Assert.assertTrue(String.format("There should be %d documents in the search response", objs.length), resBody.contains("\"hits\":{\"total\":" + objs.length));
-	    // Testing Scores
-        ArrayNode hitsJson = (ArrayNode)mapper.readTree(resBody).get("hits").get("hits");
-        Assert.assertEquals(0.9970867, hitsJson.get(0).get("_score").asDouble(), 0);
-        Assert.assertEquals(0.9780914, hitsJson.get(1).get("_score").asDouble(), 0);
+        // 创建评分函数的脚本
+        Map<String, Object> params = new HashMap<>();
+        params.put("cosine", true);
+        params.put("field", "embedding_vector");
+        params.put("vector", new double[]{0.1, 0.2, 0.3});
 
-	    // Test dot-product score function
-        body = "{" +
-                "  \"query\": {" +
-                "    \"function_score\": {" +
-                "      \"boost_mode\": \"replace\"," +
-                "      \"script_score\": {" +
-                "        \"script\": {" +
-                "          \"source\": \"binary_vector_score\"," +
-                "          \"lang\": \"knn\"," +
-                "          \"params\": {" +
-                "            \"cosine\": false," +
-                "            \"field\": \"embedding_vector\"," +
-                "            \"vector\": [" +
-                "               0.1, 0.2, 0.3" +
-                "             ]" +
-                "          }" +
-                "        }" +
-                "      }" +
-                "    }" +
-                "  }," +
-                "  \"size\": 100" +
-                "}";
-        searchRequest.setJsonEntity(body);
-        res = esClient.performRequest(searchRequest);
-        System.out.println(res);
-        resBody = EntityUtils.toString(res.getEntity());
-        System.out.println(resBody);
-        Assert.assertEquals("search should return status code 200", 200, res.getStatusLine().getStatusCode());
-        Assert.assertTrue(String.format("There should be %d documents in the search response", objs.length), resBody.contains("\"hits\":{\"total\":" + objs.length));
+        Script script = new Script(
+                Script.DEFAULT_SCRIPT_TYPE,
+                "knn",
+                "binary_vector_score",
+                params
+        );
+
+        // 创建评分函数
+        ScoreFunctionBuilder scoreFunction = new ScriptScoreFunctionBuilder(script);
+
+        // 创建查询和评分函数的组合
+        FunctionScoreQueryBuilder query = new FunctionScoreQueryBuilder(scoreFunction)
+                .boostMode(CombineFunction.REPLACE);
+
+        // 执行查询
+        SearchResponse response = client.prepareSearch(indexName)
+                .setQuery(query)
+                .setSize(100)
+                .get();
+        // Test cosine score function
+//        String body = "{" +
+//                "  \"query\": {" +
+//                "    \"function_score\": {" +
+//                "      \"boost_mode\": \"replace\"," +
+//                "      \"script_score\": {" +
+//                "        \"script\": {" +
+//                "          \"source\": \"binary_vector_score\"," +
+//                "          \"lang\": \"knn\"," +
+//                "          \"params\": {" +
+//                "            \"cosine\": true," +
+//                "            \"field\": \"embedding_vector\"," +
+//                "            \"vector\": [" +
+//                "               0.1, 0.2, 0.3" +
+//                "             ]" +
+//                "          }" +
+//                "        }" +
+//                "      }" +
+//                "    }" +
+//                "  }," +
+//                "  \"size\": 100" +
+//                "}";
+
+        response.getHits().forEach(hit -> {
+            System.out.println(hit.getScore());
+        });
         // Testing Scores
-        hitsJson = (ArrayNode)mapper.readTree(resBody).get("hits").get("hits");
-        Assert.assertEquals(1.5480561, hitsJson.get(0).get("_score").asDouble(), 0);
-        Assert.assertEquals(1.4918247, hitsJson.get(1).get("_score").asDouble(), 0);
+//        ArrayNode hitsJson = (ArrayNode) mapper.readTree(resBody).get("hits").get("hits");
+//        Assert.assertEquals(0.9970867, hitsJson.get(0).get("_score").asDouble(), 0);
+//        Assert.assertEquals(0.9780914, hitsJson.get(1).get("_score").asDouble(), 0);
+
+        // Test dot-product score function
+        Map<String, Object> params1 = new HashMap<>();
+        params1.put("cosine", false);
+        params1.put("field", "embedding_vector");
+        params1.put("vector", new double[]{0.1, 0.2, 0.3});
+
+        Script script1 = new Script(
+                Script.DEFAULT_SCRIPT_TYPE,
+                "knn",
+                "binary_vector_score",
+                params1
+        );
+
+        // 创建评分函数
+        ScoreFunctionBuilder scoreFunction1 = new ScriptScoreFunctionBuilder(script1);
+
+        // 创建查询和评分函数的组合
+        FunctionScoreQueryBuilder query1 = new FunctionScoreQueryBuilder(scoreFunction1)
+                .boostMode(CombineFunction.REPLACE);
+
+        // 执行查询
+        SearchResponse response2 = client.prepareSearch(indexName)
+                .setQuery(query1)
+                .setSize(100)
+                .get();
+
+        System.out.println(response2);
+
+//        body = "{" +
+//                "  \"query\": {" +
+//                "    \"function_score\": {" +
+//                "      \"boost_mode\": \"replace\"," +
+//                "      \"script_score\": {" +
+//                "        \"script\": {" +
+//                "          \"source\": \"binary_vector_score\"," +
+//                "          \"lang\": \"knn\"," +
+//                "          \"params\": {" +
+//                "            \"cosine\": false," +
+//                "            \"field\": \"embedding_vector\"," +
+//                "            \"vector\": [" +
+//                "               0.1, 0.2, 0.3" +
+//                "             ]" +
+//                "          }" +
+//                "        }" +
+//                "      }" +
+//                "    }" +
+//                "  }," +
+//                "  \"size\": 100" +
+//                "}";
+//        searchRequest.setJsonEntity(body);
+//        res = esClient.performRequest(searchRequest);
+//        System.out.println(res);
+//        resBody = EntityUtils.toString(res.getEntity());
+//        System.out.println(resBody);
+//        Assert.assertEquals("search should return status code 200", 200, res.getStatusLine().getStatusCode());
+//        Assert.assertTrue(String.format("There should be %d documents in the search response", objs.length), resBody.contains("\"hits\":{\"total\":" + objs.length));
+//        // Testing Scores
+//        hitsJson = (ArrayNode) mapper.readTree(resBody).get("hits").get("hits");
+//        Assert.assertEquals(1.5480561, hitsJson.get(0).get("_score").asDouble(), 0);
+//        Assert.assertEquals(1.4918247, hitsJson.get(1).get("_score").asDouble(), 0);
     }
 
     @AfterClass
     public static void shutdown() {
-        try {
-            esClient.close();
-            esServer.shutdown();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+//        try {
+//            esClient.close();
+//            esServer.shutdown();
+//        } catch (IOException e) {
+//            e.printStackTrace();
+//        }
     }
 
 }

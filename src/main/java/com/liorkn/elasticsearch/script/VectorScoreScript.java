@@ -5,44 +5,49 @@ import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Map;
 
+import com.liorkn.elasticsearch.Util;
 import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.store.ByteArrayDataInput;
-import org.elasticsearch.script.ScoreScript;
+import org.elasticsearch.script.ExecutableScript;
+import org.elasticsearch.script.SearchScript;
 import org.elasticsearch.search.lookup.SearchLookup;
 
-import com.liorkn.elasticsearch.Util;
+/**
+ * Script that scores documents based on cosine similarity embedding vectors.
+ */
+public final class VectorScoreScript extends SearchScript implements ExecutableScript {
 
-public final class VectorScoreScript extends ScoreScript {
+    // the field containing the vectors to be scored against
+    public final String field;
 
     private BinaryDocValues binaryEmbeddingReader;
     
-	private final String field;
     private final boolean cosine;
 
     private final float[] inputVector;
     private final float magnitude;
 
     @Override
-    public double execute() {
-	    try {
+    public double runAsDouble() {
+        try {
             final byte[] bytes = binaryEmbeddingReader.binaryValue().bytes;
             final ByteArrayDataInput input = new ByteArrayDataInput(bytes);
-            
+
             input.readVInt(); // returns the number of values which should be 1, MUST appear hear since it affect the next calls
-            
+
             final int len = input.readVInt();
             // in case vector is of different size
             if (len != inputVector.length * Float.BYTES) {
                 // Failing in order not to hide potential bugs
                 throw new IllegalArgumentException("Input vector & indexed vector don't have the same dimensions");
             }
-            
+
             float score = 0;
             if (cosine) {
-            	float docVectorNorm = 0.0f;
+                float docVectorNorm = 0.0f;
                 for (int i = 0; i < inputVector.length; i++) {
-               	    float v = Float.intBitsToFloat(input.readInt());
+                    float v = Float.intBitsToFloat(input.readInt());
                     docVectorNorm += v * v;  // inputVector norm
                     score += v * inputVector[i];  // dot product
                 }
@@ -60,9 +65,14 @@ public final class VectorScoreScript extends ScoreScript {
 
                 return Math.exp(score); // Convert dot-proudct range from (-INF to +INF) to (0 to +INF)
             }
-    	} catch (IOException e) {
-    		throw new UncheckedIOException(e); // again - Failing in order not to hide potential bugs
+        } catch (IOException e) {
+            throw new UncheckedIOException(e); // again - Failing in order not to hide potential bugs
         }
+    }
+
+    @Override
+    public Object run() {
+	    return runAsDouble();
 	}
     
 	@Override
@@ -74,11 +84,10 @@ public final class VectorScoreScript extends ScoreScript {
          }
     }
     
-    @SuppressWarnings("unchecked")
 	public VectorScoreScript(Map<String, Object> params, SearchLookup lookup, LeafReaderContext leafContext) {
-		super(params, lookup, leafContext);
-		
-		final Object cosineBool = params.get("cosine");
+        super(params, lookup, leafContext);
+
+        final Object cosineBool = params.get("cosine");
         this.cosine = cosineBool != null ?
                 (boolean)cosineBool :
                 true;
@@ -128,7 +137,7 @@ public final class VectorScoreScript extends ScoreScript {
 
 	}
 	
-	public static class VectorScoreScriptFactory implements LeafFactory {
+	public static class VectorScoreScriptFactory implements SearchScript.LeafFactory {
 		private final Map<String, Object> params;
         private final SearchLookup lookup;
         
@@ -142,7 +151,7 @@ public final class VectorScoreScript extends ScoreScript {
         }
 
 		@Override
-		public ScoreScript newInstance(LeafReaderContext ctx) throws IOException {
+		public SearchScript newInstance(LeafReaderContext ctx) throws IOException {
 			return new VectorScoreScript(this.params, this.lookup, ctx);
 		}
     }

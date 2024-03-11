@@ -6,7 +6,7 @@ import java.util.Map;
 
 import org.elasticsearch.script.ScriptContext;
 import org.elasticsearch.script.ScriptEngine;
-import org.elasticsearch.script.ScoreScript;
+import org.elasticsearch.script.SearchScript;
 
 /** This {@link ScriptEngine} uses Lucene segment details to implement document scoring based on their similarity with submitted document. */
 public class VectorScoringScriptEngine implements ScriptEngine {
@@ -21,16 +21,16 @@ public class VectorScoringScriptEngine implements ScriptEngine {
     
     @Override
     public <T> T compile(String scriptName, String scriptSource, ScriptContext<T> context, Map<String, String> params) {
-    	if (context.equals(ScoreScript.CONTEXT) == false) {
-            throw new IllegalArgumentException(getType() + " scripts cannot be used for context [" + context.name + "]");
-        }
+//    	if (context.equals(ScoreScript.CONTEXT) == false) {
+//            throw new IllegalArgumentException(getType() + " scripts cannot be used for context [" + context.name + "]");
+//        }
     	
     	// we use the script "source" as the script identifier
         if (!SCRIPT_SOURCE.equals(scriptSource)) {
             throw new IllegalArgumentException("Unknown script name " + scriptSource);
         }
 
-    	ScoreScript.Factory factory = VectorScoreScript.VectorScoreScriptFactory::new;
+    	SearchScript.Factory factory = VectorScoreScript.VectorScoreScriptFactory::new;
         return context.factoryClazz.cast(factory);
     }
 }
