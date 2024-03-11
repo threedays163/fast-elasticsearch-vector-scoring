@@ -100,10 +100,20 @@ public final class VectorScoreScript extends SearchScript implements ExecutableS
         // get query inputVector - convert to primitive
         final Object vector = params.get("vector");
         if(vector != null) {
-            final ArrayList<Double> tmp = (ArrayList<Double>) vector;
-            inputVector = new float[tmp.size()];
-            for (int i = 0; i < inputVector.length; i++) {
-                inputVector[i] = tmp.get(i).floatValue();
+            if (vector instanceof Double[]){
+                final Double[] tmp = (Double[]) vector;
+                inputVector = new float[tmp.length];
+                for (int i = 0; i < inputVector.length; i++) {
+                    inputVector[i] = tmp[i].floatValue();
+                }
+            } else if (vector instanceof ArrayList) {
+                final ArrayList<Double> tmp = (ArrayList<Double>) vector;
+                inputVector = new float[tmp.size()];
+                for (int i = 0; i < inputVector.length; i++) {
+                    inputVector[i] = tmp.get(i).floatValue();
+                }
+            } else {
+                throw new IllegalArgumentException("vector must be an array of doubles or an arraylist of doubles");
             }
         } else {
             final Object encodedVector = params.get("encoded_vector");
