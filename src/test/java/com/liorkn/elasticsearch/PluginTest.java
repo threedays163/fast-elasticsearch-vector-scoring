@@ -231,6 +231,9 @@ public class PluginTest {
                 .get();
 
         System.out.println(response2);
+        response2.getHits().forEach(hit -> {
+            System.out.println(hit.getScore());
+        });
 
 //        body = "{" +
 //                "  \"query\": {" +

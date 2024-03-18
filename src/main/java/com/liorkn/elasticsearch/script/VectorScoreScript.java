@@ -100,7 +100,25 @@ public final class VectorScoreScript extends SearchScript implements ExecutableS
         // get query inputVector - convert to primitive
         final Object vector = params.get("vector");
         if(vector != null) {
-            if (vector instanceof Double[]){
+            if (vector instanceof float[]) {
+                final float[] tmp = (float[]) vector;
+                inputVector = new float[tmp.length];
+                for (int i = 0; i < inputVector.length; i++) {
+                    inputVector[i] = tmp[i];
+                }
+            } else if (vector instanceof Float[]) {
+                final Float[] tmp = (Float[]) vector;
+                inputVector = new float[tmp.length];
+                for (int i = 0; i < inputVector.length; i++) {
+                    inputVector[i] = tmp[i].floatValue();
+                }
+            } else if (vector instanceof double[]) {
+                final double[] tmp = (double[]) vector;
+                inputVector = new float[tmp.length];
+                for (int i = 0; i < inputVector.length; i++) {
+                    inputVector[i] = (float) tmp[i];
+                }
+            } else if (vector instanceof Double[]){
                 final Double[] tmp = (Double[]) vector;
                 inputVector = new float[tmp.length];
                 for (int i = 0; i < inputVector.length; i++) {
@@ -113,7 +131,7 @@ public final class VectorScoreScript extends SearchScript implements ExecutableS
                     inputVector[i] = tmp.get(i).floatValue();
                 }
             } else {
-                throw new IllegalArgumentException("vector must be an array of doubles or an arraylist of doubles");
+                throw new IllegalArgumentException("vector must be an array of doubles or an arraylist of doubles:" + vector.getClass());
             }
         } else {
             final Object encodedVector = params.get("encoded_vector");
